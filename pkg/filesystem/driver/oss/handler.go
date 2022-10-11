@@ -15,6 +15,8 @@ import (
 
 	"github.com/HFO4/aliyun-oss-go-sdk/oss"
 	model "github.com/cloudreve/Cloudreve/v3/models"
+	"github.com/cloudreve/Cloudreve/v3/pkg/auth"
+	"github.com/cloudreve/Cloudreve/v3/pkg/cache"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/chunk"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/chunk/backoff"
 	"github.com/cloudreve/Cloudreve/v3/pkg/filesystem/fsctx"
@@ -193,7 +195,7 @@ func (handler *Driver) Get(ctx context.Context, path string) (response.RSCloser,
 	ctx = context.WithValue(ctx, fsctx.ForceUsePublicEndpointCtx, false)
 
 	// 获取文件源地址
-	downloadURL, err := handler.Source(
+	downloadURL, err := handler.SourceGet(
 		ctx,
 		path,
 		url.URL{},
@@ -328,6 +330,52 @@ func (handler *Driver) Thumb(ctx context.Context, path string) (*response.Conten
 
 // Source 获取外链URL
 func (handler *Driver) Source(
+	ctx context.Context,
+	path string,
+	baseURL url.URL,
+	ttl int64,
+	isDownload bool,
+	speed int,
+) (string, error) {
+	cacheKey := fmt.Sprintf("oss_source_%d_%s", handler.Policy.ID, path)
+	if file, ok := ctx.Value(fsctx.FileModelCtx).(model.File); ok {
+		cacheKey = fmt.Sprintf("oss_source_file_%d_%d", file.UpdatedAt.Unix(), file.ID)
+		// 如果是永久链接，则返回签名后的中转外链
+		if ttl == 0 {
+			signedURI, err := auth.SignURI(
+				auth.General,
+				fmt.Sprintf("/api/v3/file/source/%d/%s", file.ID, file.Name),
+				ttl,
+			)
+			if err != nil {
+				return "", err
+			}
+			return baseURL.ResolveReference(signedURI).String(), nil
+		}
+
+	}
+
+	// 尝试从缓存中查找
+	if cachedURL, ok := cache.Get(cacheKey); ok {
+		return cachedURL.(string), nil
+	}
+
+	// 缓存不存在，重新获取
+	res, err := handler.SourceGet(ctx, path, baseURL, ttl, true, 0)
+	if err == nil {
+		// 写入新的缓存
+		cache.Set(
+			cacheKey,
+			res,
+			model.GetIntSetting("oss_source_timeout", 1800),
+		)
+		return res, nil
+	}
+	return "", err
+}
+
+// Source 获取外链URL
+func (handler *Driver) SourceGet(
 	ctx context.Context,
 	path string,
 	baseURL url.URL,
