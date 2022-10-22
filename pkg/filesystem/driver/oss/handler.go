@@ -279,14 +279,30 @@ func (handler *Driver) Put(ctx context.Context, file fsctx.FileHeader) error {
 // 返回未删除的文件
 func (handler *Driver) Delete(ctx context.Context, files []string) ([]string, error) {
 	// 删除文件
-	delRes, err := handler.bucket.DeleteObjects(files)
+	BATCH_SIZE := 500
+	start := 0
+	deletedObjects := []string{}
+	for {
+		end := start + BATCH_SIZE
+		if end > cap(files) {
+			end = cap(files)
+		}
 
-	if err != nil {
-		return files, err
+		delRes, err := handler.bucket.DeleteObjects(files[start:end])
+		if err != nil {
+			return util.SliceDifference(files, deletedObjects), err
+		}
+
+		deletedObjects = append(deletedObjects, delRes.DeletedObjects...)
+
+		start = end
+		if start >= cap(files) {
+			break
+		}
 	}
 
 	// 统计未删除的文件
-	failed := util.SliceDifference(files, delRes.DeletedObjects)
+	failed := util.SliceDifference(files, deletedObjects)
 	if len(failed) > 0 {
 		return failed, errors.New("failed to delete")
 	}
