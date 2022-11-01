@@ -191,14 +191,32 @@ func RemoveFilesWithSoftLinks(files []File) ([]File, error) {
 	}
 
 	// 查询软链接的文件
-	var filesWithSoftLinks []File
-	tx := DB
-	for _, value := range files {
-		tx = tx.Or("source_name = ? and policy_id = ? and id != ?", value.SourceName, value.PolicyID, value.ID)
-	}
-	result := tx.Find(&filesWithSoftLinks)
-	if result.Error != nil {
-		return nil, result.Error
+	filesWithSoftLinks := make([]File, 0)
+  BATCH_SIZE := 100
+  start := 0
+  for {
+		end := start + BATCH_SIZE
+		if end > cap(files) {
+			end = cap(files)
+		}
+
+		tx := DB
+		for _, value := range files[start:end] {
+			tx = tx.Or("source_name = ? and policy_id = ? and id != ?", value.SourceName, value.PolicyID, value.ID)
+		}
+
+		var queryResult []File;
+		result := tx.Find(&queryResult)
+		if result.Error != nil {
+			return nil, result.Error
+		}
+
+		filesWithSoftLinks = append(filesWithSoftLinks, queryResult...)
+
+    start = end
+    if start >= cap(files) {
+ 			break
+    }
 	}
 
 	// 过滤具有软连接的文件
